@@ -12,6 +12,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write   # let the badge-update step push README updates
+
 jobs:
   test:
     name: Test (macOS)
@@ -20,6 +23,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -46,11 +52,52 @@ jobs:
         run: swift test --enable-code-coverage
 
       - name: Coverage report
+        id: cov
         if: always()
         run: |
+          set -e
           BIN=$(find .build/arm64-apple-macosx/debug -name '*PackageTests.xctest' -type d | head -1)
+          if [[ -z "$BIN" ]]; then
+            echo "No xctest bundle found"
+            exit 0
+          fi
           xcrun llvm-cov report \
             "$BIN/Contents/MacOS/$(basename "$BIN" .xctest)" \
             --instr-profile=.build/debug/codecov/default.profdata \
             --ignore-filename-regex='\.build|Tests|checkouts' \
-            2>/dev/null | tail -5 || true
+            | tee coverage.txt | tail -5
+          # Lines-cover % from the TOTAL row (field 10)
+          PCT=$(grep '^TOTAL' coverage.txt | awk '{print $10}' | tr -d '%')
+          PCT_INT=${PCT%.*}
+          echo "pct=$PCT_INT" >> "$GITHUB_OUTPUT"
+
+      - name: Update coverage badge
+        if: |
+          success() &&
+          steps.cov.outputs.pct != '' &&
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main'
+        env:
+          PCT_INT: ${{ steps.cov.outputs.pct }}
+        run: |
+          set -e
+          COLOR="red"
+          if [ "$PCT_INT" -ge 80 ]; then
+            COLOR="brightgreen"
+          elif [ "$PCT_INT" -ge 50 ]; then
+            COLOR="yellow"
+          elif [ "$PCT_INT" -ge 30 ]; then
+            COLOR="orange"
+          fi
+          NEW_URL="https://img.shields.io/badge/Coverage-${PCT_INT}%25-${COLOR}.svg"
+          # Replace any Coverage-NN%-color badge URL in README.md
+          sed -i '' -E "s|https://img\.shields\.io/badge/Coverage-[0-9]+%25-[a-z]+\.svg|${NEW_URL}|" README.md || true
+          if [[ -n "$(git diff README.md)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add README.md
+            git commit -m "ci: update coverage badge to ${PCT_INT}% [skip ci]"
+            git push
+          else
+            echo "Coverage badge already at ${PCT_INT}% — no change."
+          fi
