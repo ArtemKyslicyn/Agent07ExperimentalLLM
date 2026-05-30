@@ -5,6 +5,7 @@ llama.cpp builds, mock backends, and (soon) MLX without recompiling — and
 without symbol collisions when multiple llama.cpp variants live in the
 same process.
 
+[![CI](https://github.com/ArtemKyslicyn/Agent07ExperimentalLLM/actions/workflows/ci.yml/badge.svg)](https://github.com/ArtemKyslicyn/Agent07ExperimentalLLM/actions/workflows/ci.yml)
 [![Swift 6](https://img.shields.io/badge/Swift-6.0-orange)](https://swift.org)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
