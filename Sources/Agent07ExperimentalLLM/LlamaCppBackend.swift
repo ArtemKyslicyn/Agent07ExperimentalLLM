@@ -24,6 +24,9 @@ public final class LlamaCppBackend: LlamaBackend, @unchecked Sendable {
     private let environmentExtras: [String: String]
     private var loadedModels: [UUID: ModelHandle] = [:]
     private var modelPaths: [UUID: String] = [:]
+    /// Per-handle load config so generation uses the REAL context window the caller
+    /// requested at loadModel time (was previously dropped → generate hardcoded .full → 4096).
+    private var loadConfigs: [UUID: ModelLoadConfig] = [:]
 
     public var capabilities: BackendCapabilities {
         BackendCapabilities(
@@ -69,12 +72,14 @@ public final class LlamaCppBackend: LlamaBackend, @unchecked Sendable {
         let handle = ModelHandle(path: path, backendId: backendId)
         loadedModels[handle.id] = handle
         modelPaths[handle.id] = path
+        loadConfigs[handle.id] = config
         return handle
     }
 
     public func unloadModel(_ handle: ModelHandle) async {
         loadedModels.removeValue(forKey: handle.id)
         modelPaths.removeValue(forKey: handle.id)
+        loadConfigs.removeValue(forKey: handle.id)
     }
 
     // MARK: - Generation
@@ -89,7 +94,7 @@ public final class LlamaCppBackend: LlamaBackend, @unchecked Sendable {
             modelPath: modelPath,
             prompt: prompt,
             config: config,
-            loadConfig: .full
+            loadConfig: loadConfigs[model.id] ?? .full
         )
         let duration = Date().timeIntervalSince(start)
         let tokenEstimate = output.components(separatedBy: .whitespacesAndNewlines).count
@@ -110,7 +115,7 @@ public final class LlamaCppBackend: LlamaBackend, @unchecked Sendable {
             modelPath: modelPath,
             prompt: prompt,
             config: config,
-            loadConfig: .full
+            loadConfig: loadConfigs[model.id] ?? .full
         )
         let duration = Date().timeIntervalSince(start)
         if !output.isEmpty {
@@ -169,11 +174,22 @@ public final class LlamaCppBackend: LlamaBackend, @unchecked Sendable {
             args += ["--n-gpu-layers", String(mask.count)]
         }
 
-        // Do not pass `--stop`: Homebrew `llama-completion` / `llama-cli` (b8680+) reject it
-        // ("invalid argument: --stop", exit 1). Stop behavior is approximated via `-n` maxTokens
-        // and model EOS; `config.stopSequences` is ignored for this subprocess backend.
+        // Fix #1: scale the subprocess timeout with the generation budget. The old fixed
+        // 60s killed big/reasoning models mid-turn (~18 tok/s → only ~1080 tokens fit 60s).
+        // Budget ≈ load margin (120s) + maxTokens at a conservative 8 tok/s floor, capped
+        // at 30 min so a runaway can't hang forever.
+        let scaledTimeout = min(1800, 120 + config.maxTokens / 8)
 
-        return try runProcess(binaryPath, arguments: args)
+        // Fix #5: `--stop` is rejected by Homebrew b8680+, so approximate stop sequences by
+        // POST-TRUNCATING the output at the earliest stop marker (prevents runaway past the
+        // assistant turn into fake <|im_start|> continuations). Model EOS still ends most runs.
+        var output = try runProcess(binaryPath, arguments: args, timeoutSeconds: scaledTimeout)
+        var cut = output.endIndex
+        for stop in config.stopSequences {
+            if let r = output.range(of: stop), r.lowerBound < cut { cut = r.lowerBound }
+        }
+        if cut < output.endIndex { output = String(output[..<cut]) }
+        return output
     }
 
     private func runProcess(_ path: String, arguments: [String], timeoutSeconds: Int = 60) throws -> String {
