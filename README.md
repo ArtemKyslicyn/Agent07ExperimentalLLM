@@ -9,7 +9,7 @@ same process.
 [![Swift 6](https://img.shields.io/badge/Swift-6.0-orange.svg)](https://swift.org)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue.svg)](#)
 [![Tests](https://img.shields.io/badge/Tests-47%20passing-success.svg)](#testing)
-[![Coverage](https://img.shields.io/badge/Coverage-53%25-yellow.svg)](#testing)
+[![Coverage](https://img.shields.io/badge/Coverage-44%25-orange.svg)](#testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Why
